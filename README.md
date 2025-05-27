@@ -77,3 +77,5 @@ Translations are periodically pulled from Transifex and merged into the git repo
 
 **Important**: We do not accept translation changes as GitHub pull requests because the next
 pull from Transifex would automatically overwrite them again.
+
+                                                                resultStatus(true, "You should now have a wifi connection entry with correct security settings and certificate verification.\n\nMake sure to actually use it!");
