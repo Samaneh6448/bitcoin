@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2022 The Bitcoin Core developers
+// Copyright (c) 2015-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -75,19 +75,15 @@ void ConfirmSend(QString* text = nullptr, QMessageBox::StandardButton confirm_ty
 }
 
 //! Send coins to address and return txid.
-uint256 SendCoins(CWallet& wallet, SendCoinsDialog& sendCoinsDialog, const CTxDestination& address, CAmount amount, bool rbf,
+Txid SendCoins(CWallet& wallet, SendCoinsDialog& sendCoinsDialog, const CTxDestination& address, CAmount amount,
                   QMessageBox::StandardButton confirm_type = QMessageBox::Yes)
 {
     QVBoxLayout* entries = sendCoinsDialog.findChild<QVBoxLayout*>("entries");
     SendCoinsEntry* entry = qobject_cast<SendCoinsEntry*>(entries->itemAt(0)->widget());
     entry->findChild<QValidatedLineEdit*>("payTo")->setText(QString::fromStdString(EncodeDestination(address)));
     entry->findChild<BitcoinAmountField*>("payAmount")->setValue(amount);
-    sendCoinsDialog.findChild<QFrame*>("frameFee")
-        ->findChild<QFrame*>("frameFeeSelection")
-        ->findChild<QCheckBox*>("optInRBF")
-        ->setCheckState(rbf ? Qt::Checked : Qt::Unchecked);
-    uint256 txid;
-    boost::signals2::scoped_connection c(wallet.NotifyTransactionChanged.connect([&txid](const uint256& hash, ChangeType status) {
+    Txid txid;
+    btcsignals::scoped_connection c(wallet.NotifyTransactionChanged.connect([&txid](const Txid& hash, ChangeType status) {
         if (status == CT_NEW) txid = hash;
     }));
     ConfirmSend(/*text=*/nullptr, confirm_type);
@@ -97,7 +93,7 @@ uint256 SendCoins(CWallet& wallet, SendCoinsDialog& sendCoinsDialog, const CTxDe
 }
 
 //! Find index of txid in transaction list.
-QModelIndex FindTx(const QAbstractItemModel& model, const uint256& txid)
+QModelIndex FindTx(const QAbstractItemModel& model, const Txid& txid)
 {
     QString hash = QString::fromStdString(txid.ToString());
     int rows = model.rowCount({});
@@ -111,7 +107,7 @@ QModelIndex FindTx(const QAbstractItemModel& model, const uint256& txid)
 }
 
 //! Invoke bumpfee on txid and check results.
-void BumpFee(TransactionView& view, const uint256& txid, bool expectDisabled, std::string expectError, bool cancel)
+void BumpFee(TransactionView& view, const Txid& txid, bool expectDisabled, std::string expectError, bool cancel)
 {
     QTableView* table = view.findChild<QTableView*>("transactionView");
     QModelIndex index = FindTx(*table->selectionModel()->model(), txid);
@@ -183,7 +179,7 @@ void SyncUpWallet(const std::shared_ptr<CWallet>& wallet, interfaces::Node& node
 {
     WalletRescanReserver reserver(*wallet);
     reserver.reserve();
-    CWallet::ScanResult result = wallet->ScanForWalletTransactions(Params().GetConsensus().hashGenesisBlock, /*start_height=*/0, /*max_height=*/{}, reserver, /*fUpdate=*/true, /*save_progress=*/false);
+    CWallet::ScanResult result = wallet->ScanForWalletTransactions(Params().GetConsensus().hashGenesisBlock, /*start_height=*/0, /*max_height=*/{}, reserver, /*save_progress=*/false);
     QCOMPARE(result.status, CWallet::ScanResult::SUCCESS);
     QCOMPARE(result.last_scanned_block, WITH_LOCK(node.context()->chainman->GetMutex(), return node.context()->chainman->ActiveChain().Tip()->GetBlockHash()));
     QVERIFY(result.last_failed_block.IsNull());
@@ -192,7 +188,6 @@ void SyncUpWallet(const std::shared_ptr<CWallet>& wallet, interfaces::Node& node
 std::shared_ptr<CWallet> SetupDescriptorsWallet(interfaces::Node& node, TestChain100Setup& test, bool watch_only = false)
 {
     std::shared_ptr<CWallet> wallet = std::make_shared<CWallet>(node.context()->chain.get(), "", CreateMockableWalletDatabase());
-    wallet->LoadWallet();
     LOCK(wallet->cs_wallet);
     wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
     if (watch_only) {
@@ -215,9 +210,8 @@ std::shared_ptr<CWallet> SetupDescriptorsWallet(interfaces::Node& node, TestChai
     assert(descs.size() == 1);
     auto& desc = descs.at(0);
     WalletDescriptor w_desc(std::move(desc), 0, 0, 1, 1);
-    auto spk_manager = *Assert(wallet->AddWalletDescriptor(w_desc, provider, "", false));
-    assert(spk_manager);
-    CTxDestination dest = GetDestinationForKey(test.coinbaseKey.GetPubKey(), wallet->m_default_address_type);
+    Assert(wallet->AddWalletDescriptor(w_desc, provider, "", false));
+    const PKHash dest{test.coinbaseKey.GetPubKey()};
     wallet->SetAddressBook(dest, "", wallet::AddressPurpose::RECEIVE);
     wallet->SetLastBlockProcessed(105, WITH_LOCK(node.context()->chainman->GetMutex(), return node.context()->chainman->ActiveChain().Tip()->GetBlockHash()));
     SyncUpWallet(wallet, node);
@@ -285,8 +279,8 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CWallet>& wallet)
     // Send two transactions, and verify they are added to transaction list.
     TransactionTableModel* transactionTableModel = walletModel.getTransactionTableModel();
     QCOMPARE(transactionTableModel->rowCount({}), 105);
-    uint256 txid1 = SendCoins(*wallet.get(), sendCoinsDialog, PKHash(), 5 * COIN, /*rbf=*/false);
-    uint256 txid2 = SendCoins(*wallet.get(), sendCoinsDialog, PKHash(), 10 * COIN, /*rbf=*/true);
+    Txid txid1 = SendCoins(*wallet.get(), sendCoinsDialog, PKHash(), 5 * COIN);
+    Txid txid2 = SendCoins(*wallet.get(), sendCoinsDialog, PKHash(), 10 * COIN);
     // Transaction table model updates on a QueuedConnection, so process events to ensure it's updated.
     qApp->processEvents();
     QCOMPARE(transactionTableModel->rowCount({}), 107);
@@ -366,7 +360,7 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CWallet>& wallet)
     std::vector<std::string> requests = walletModel.wallet().getAddressReceiveRequests();
     QCOMPARE(requests.size(), size_t{1});
     RecentRequestEntry entry;
-    DataStream{MakeUCharSpan(requests[0])} >> entry;
+    SpanReader{MakeByteSpan(requests[0])} >> entry;
     QCOMPARE(entry.nVersion, int{1});
     QCOMPARE(entry.id, int64_t{1});
     QVERIFY(entry.date.isValid());
@@ -406,7 +400,7 @@ void TestGUIWatchOnly(interfaces::Node& node, TestChain100Setup& test)
                    sendCoinsDialog.findChild<QLabel*>("labelBalance"));
 
     // Set change address
-    sendCoinsDialog.getCoinControl()->destChange = GetDestinationForKey(test.coinbaseKey.GetPubKey(), OutputType::LEGACY);
+    sendCoinsDialog.getCoinControl()->destChange = PKHash{test.coinbaseKey.GetPubKey()};
 
     // Time to reject "save" PSBT dialog ('SendCoins' locks the main thread until the dialog receives the event).
     QTimer timer;
@@ -426,16 +420,15 @@ void TestGUIWatchOnly(interfaces::Node& node, TestChain100Setup& test)
     timer.start(500);
 
     // Send tx and verify PSBT copied to the clipboard.
-    SendCoins(*wallet.get(), sendCoinsDialog, PKHash(), 5 * COIN, /*rbf=*/false, QMessageBox::Save);
+    SendCoins(*wallet.get(), sendCoinsDialog, PKHash(), 5 * COIN, QMessageBox::Save);
     const std::string& psbt_string = QApplication::clipboard()->text().toStdString();
     QVERIFY(!psbt_string.empty());
 
     // Decode psbt
     std::optional<std::vector<unsigned char>> decoded_psbt = DecodeBase64(psbt_string);
     QVERIFY(decoded_psbt);
-    PartiallySignedTransaction psbt;
-    std::string err;
-    QVERIFY(DecodeRawPSBT(psbt, MakeByteSpan(*decoded_psbt), err));
+    util::Result<PartiallySignedTransaction> psbt = DecodeRawPSBT(MakeByteSpan(*decoded_psbt));
+    QVERIFY(psbt);
 }
 
 void TestGUI(interfaces::Node& node)

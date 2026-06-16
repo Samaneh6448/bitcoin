@@ -8,14 +8,15 @@
 
 #include <attributes.h>
 #include <crypto/common.h>
-#include <prevector.h> // IWYU pragma: export
+#include <prevector.h>
 #include <serialize.h>
 #include <uint256.h>
 #include <util/hash_type.h>
 
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
-#include <cstring>
+#include <iterator>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -270,18 +271,10 @@ public:
     }
 
     inline bool operator==(const int64_t& rhs) const    { return m_value == rhs; }
-    inline bool operator!=(const int64_t& rhs) const    { return m_value != rhs; }
-    inline bool operator<=(const int64_t& rhs) const    { return m_value <= rhs; }
-    inline bool operator< (const int64_t& rhs) const    { return m_value <  rhs; }
-    inline bool operator>=(const int64_t& rhs) const    { return m_value >= rhs; }
-    inline bool operator> (const int64_t& rhs) const    { return m_value >  rhs; }
+    inline auto operator<=>(const int64_t& rhs) const    { return m_value <=> rhs; }
 
     inline bool operator==(const CScriptNum& rhs) const { return operator==(rhs.m_value); }
-    inline bool operator!=(const CScriptNum& rhs) const { return operator!=(rhs.m_value); }
-    inline bool operator<=(const CScriptNum& rhs) const { return operator<=(rhs.m_value); }
-    inline bool operator< (const CScriptNum& rhs) const { return operator< (rhs.m_value); }
-    inline bool operator>=(const CScriptNum& rhs) const { return operator>=(rhs.m_value); }
-    inline bool operator> (const CScriptNum& rhs) const { return operator> (rhs.m_value); }
+    inline auto operator<=>(const CScriptNum& rhs) const { return operator<=>(rhs.m_value); }
 
     inline CScriptNum operator+(   const int64_t& rhs)    const { return CScriptNum(m_value + rhs);}
     inline CScriptNum operator-(   const int64_t& rhs)    const { return CScriptNum(m_value - rhs);}
@@ -403,10 +396,8 @@ private:
 /**
  * We use a prevector for the script to reduce the considerable memory overhead
  *  of vectors in cases where they normally contain a small number of small elements.
- * Tests in October 2015 showed use of this reduced dbcache memory usage by 23%
- *  and made an initial sync 13% faster.
  */
-typedef prevector<28, unsigned char> CScriptBase;
+using CScriptBase = prevector<36, uint8_t>;
 
 bool GetScriptOp(CScriptBase::const_iterator& pc, CScriptBase::const_iterator end, opcodetype& opcodeRet, std::vector<unsigned char>* pvchRet);
 
@@ -556,6 +547,8 @@ public:
     bool IsPayToWitnessScriptHash() const;
     bool IsWitnessProgram(int& version, std::vector<unsigned char>& program) const;
 
+    bool IsPayToTaproot() const;
+
     /** Called by IsStandardTx and P2SH/BIP62 VerifyScript (which makes it consensus-critical). */
     bool IsPushOnly(const_iterator pc) const;
     bool IsPushOnly() const;
@@ -595,6 +588,8 @@ struct CScriptWitness
     void SetNull() { stack.clear(); stack.shrink_to_fit(); }
 
     std::string ToString() const;
+
+    bool operator==(const CScriptWitness&) const = default;
 };
 
 /** A reference to a CScript: the Hash160 of its serialization */

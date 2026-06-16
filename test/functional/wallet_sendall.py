@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
-# Copyright (c) 2022 The Bitcoin Core developers
+# Copyright (c) 2022-present The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the sendall RPC command."""
 
 from decimal import Decimal, getcontext
 
+from test_framework.messages import SEQUENCE_FINAL
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
     assert_greater_than,
+    assert_greater_than_or_equal,
     assert_raises_rpc_error,
 )
 
 # Decorator to reset activewallet to zero utxos
 def cleanup(func):
     def wrapper(self):
-        try:
-            func(self)
-        finally:
-            if 0 < self.wallet.getbalances()["mine"]["trusted"]:
-                self.wallet.sendall([self.remainder_target])
-            assert_equal(0, self.wallet.getbalances()["mine"]["trusted"]) # wallet is empty
+        func(self)
+
+        if 0 < self.wallet.getbalances()["mine"]["trusted"]:
+            self.wallet.sendall([self.remainder_target])
+        assert_equal(0, self.wallet.getbalances()["mine"]["trusted"]) # wallet is empty
     return wrapper
 
 class SendallTest(BitcoinTestFramework):
@@ -57,8 +58,8 @@ class SendallTest(BitcoinTestFramework):
         return self.wallet.getbalances()["mine"]["trusted"]
 
     # Helper schema for success cases
-    def test_sendall_success(self, sendall_args, remaining_balance = 0):
-        sendall_tx_receipt = self.wallet.sendall(sendall_args)
+    def test_sendall_success(self, sendall_args, remaining_balance = 0, *, options=None):
+        sendall_tx_receipt = self.wallet.sendall(sendall_args, options=options)
         self.generate(self.nodes[0], 1)
         # wallet has remaining balance (usually empty)
         assert_equal(remaining_balance, self.wallet.getbalances()["mine"]["trusted"])
@@ -306,9 +307,9 @@ class SendallTest(BitcoinTestFramework):
         decoded = self.nodes[0].decodepsbt(psbt)
         assert_equal(len(decoded["inputs"]), 1)
         assert_equal(len(decoded["outputs"]), 1)
-        assert_equal(decoded["tx"]["vin"][0]["txid"], utxo["txid"])
-        assert_equal(decoded["tx"]["vin"][0]["vout"], utxo["vout"])
-        assert_equal(decoded["tx"]["vout"][0]["scriptPubKey"]["address"], self.remainder_target)
+        assert_equal(decoded["inputs"][0]["previous_txid"], utxo["txid"])
+        assert_equal(decoded["inputs"][0]["previous_vout"], utxo["vout"])
+        assert_equal(decoded["outputs"][0]["script"]["address"], self.remainder_target)
 
     @cleanup
     def sendall_with_minconf(self):
@@ -430,6 +431,28 @@ class SendallTest(BitcoinTestFramework):
 
         assert_greater_than(higher_parent_feerate_amount, lower_parent_feerate_amount)
 
+    @cleanup
+    def sendall_anti_fee_sniping(self):
+        self.log.info("Testing sendall does anti-fee-sniping when locktime is not specified")
+        self.add_utxos([10,11])
+        tx_from_wallet = self.test_sendall_success(sendall_args = [self.remainder_target], options={"replaceable":False})
+
+        # the locktime should be within 100 blocks of the
+        # block height
+        assert_greater_than_or_equal(tx_from_wallet["decoded"]["locktime"], tx_from_wallet["blockheight"] - 100)
+
+        self.log.info("Testing sendall does not do anti-fee-sniping when locktime is specified")
+        self.add_utxos([10,11])
+        txid = self.wallet.sendall(recipients=[self.remainder_target], options={"locktime":0})["txid"]
+        assert_equal(self.wallet.gettransaction(txid=txid, verbose=True)["decoded"]["locktime"], 0)
+
+        self.log.info("Testing sendall does not do anti-fee-sniping when even one of the sequences is final")
+        self.add_utxos([10, 11])
+        utxos = self.wallet.listunspent()
+        utxos[0]["sequence"] = SEQUENCE_FINAL
+        txid = self.wallet.sendall(recipients=[self.remainder_target], inputs=utxos)["txid"]
+        assert_equal(self.wallet.gettransaction(txid=txid, verbose=True)["decoded"]["locktime"], 0)
+
     # This tests needs to be the last one otherwise @cleanup will fail with "Transaction too large" error
     def sendall_fails_with_transaction_too_large(self):
         self.log.info("Test that sendall fails if resulting transaction is too large")
@@ -510,6 +533,9 @@ class SendallTest(BitcoinTestFramework):
 
         # Sendall only uses outputs with less than a given number of confirmation when using minconf
         self.sendall_with_maxconf()
+
+        # Sendall discourages fee-sniping when a locktime is not specified
+        self.sendall_anti_fee_sniping()
 
         # Sendall spends unconfirmed change
         self.sendall_spends_unconfirmed_change()

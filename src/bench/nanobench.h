@@ -40,10 +40,20 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include <chrono>        // high_resolution_clock
+#include <cassert>       // assert
+#include <cstdint>
 #include <cstring>       // memcpy
+// IWYU will only see this header with ANKERL_NANOBENCH_IMPLEMENT defined, which
+// makes it suggest removing forward declarations for the Input/output library.
+// IWYU pragma: begin_keep
 #include <iosfwd>        // for std::ostream* custom output target in Config
+// IWYU pragma: end_keep
+#include <limits>
+#include <ratio>
 #include <string>        // all names
+#include <type_traits>
 #include <unordered_map> // holds context information of results
+#include <utility>
 #include <vector>        // holds all results
 
 #define ANKERL_NANOBENCH(x) ANKERL_NANOBENCH_PRIVATE_##x()
@@ -126,6 +136,11 @@
 
 // declarations ///////////////////////////////////////////////////////////////////////////////////
 
+// As definitions follow these declarations within this
+// header, IWYU considers some of them redundant and
+// suggests removing them. Disable this IWYU behavior.
+// IWYU pragma: begin_keep
+
 namespace ankerl {
 namespace nanobench {
 
@@ -136,6 +151,11 @@ struct Config;
 class Result;
 class Rng;
 class BigO;
+
+namespace detail {
+template <typename SetupOp>
+class SetupRunner;
+} // namespace detail
 
 /**
  * @brief Renders output from a mustache-like template and benchmark results.
@@ -363,6 +383,8 @@ class LinuxPerformanceCounters;
 } // namespace detail
 } // namespace nanobench
 } // namespace ankerl
+
+// IWYU pragma: end_keep
 
 // definitions ////////////////////////////////////////////////////////////////////////////////////
 
@@ -819,7 +841,7 @@ public:
     /**
      * @brief Minimum time each epoch should take.
      *
-     * Default is zero, so we are fully relying on clockResolutionMultiple(). In most cases this is exactly what you want. If you see
+     * Default is 1ms, so we are mostly relying on clockResolutionMultiple(). In most cases this is exactly what you want. If you see
      * that the evaluation is unreliable with a high `err%`, you can increase either minEpochTime() or minEpochIterations().
      *
      * @see maxEpochTime, minEpochIterations
@@ -1007,7 +1029,21 @@ public:
     Bench& config(Config const& benchmarkConfig);
     ANKERL_NANOBENCH(NODISCARD) Config const& config() const noexcept;
 
+    /**
+     * @brief Configure an untimed setup step per epoch (forces single-iteration epochs).
+     *
+     * Example: `bench.setup(...).run(...);`
+     */
+    template <typename SetupOp>
+    detail::SetupRunner<SetupOp> setup(SetupOp setupOp);
+
 private:
+    template <typename SetupOp, typename Op>
+    Bench& runImpl(SetupOp& setupOp, Op&& op);
+
+    template <typename SetupOp>
+    friend class detail::SetupRunner;
+
     Config mConfig{};
     std::vector<Result> mResults{};
 };
@@ -1207,14 +1243,47 @@ constexpr uint64_t Rng::rotl(uint64_t x, unsigned k) noexcept {
     return (x << k) | (x >> (64U - k));
 }
 
+namespace detail {
+
+template <typename SetupOp>
+class SetupRunner {
+public:
+    explicit SetupRunner(SetupOp setupOp, Bench& bench)
+        : mSetupOp(std::move(setupOp))
+        , mBench(bench) {}
+
+    template <typename Op>
+    ANKERL_NANOBENCH_NO_SANITIZE("integer")
+    Bench& run(Op&& op) {
+        assert((mBench.epochIterations() <= 1) &&
+               "setup() runs once per epoch, not once per iteration; it requires epochIterations(1)");
+        mBench.epochIterations(1);
+        return mBench.runImpl(mSetupOp, std::forward<Op>(op));
+    }
+
+private:
+    SetupOp mSetupOp;
+    Bench& mBench;
+};
+} // namespace detail
+
 template <typename Op>
 ANKERL_NANOBENCH_NO_SANITIZE("integer")
 Bench& Bench::run(Op&& op) {
+    auto setupOp = [] {};
+    return runImpl(setupOp, std::forward<Op>(op));
+}
+
+template <typename SetupOp, typename Op>
+ANKERL_NANOBENCH_NO_SANITIZE("integer")
+Bench& Bench::runImpl(SetupOp& setupOp, Op&& op) {
     // It is important that this method is kept short so the compiler can do better optimizations/ inlining of op()
     detail::IterationLogic iterationLogic(*this);
     auto& pc = detail::performanceCounters();
 
     while (auto n = iterationLogic.numIters()) {
+        setupOp();
+
         pc.beginMeasure();
         Clock::time_point const before = Clock::now();
         while (n-- > 0) {
@@ -1227,6 +1296,11 @@ Bench& Bench::run(Op&& op) {
     }
     iterationLogic.moveResultTo(mResults);
     return *this;
+}
+
+template <typename SetupOp>
+detail::SetupRunner<SetupOp> Bench::setup(SetupOp setupOp) {
+    return detail::SetupRunner<SetupOp>(std::move(setupOp), *this);
 }
 
 // Performs all evaluations.
@@ -1301,12 +1375,15 @@ void doNotOptimizeAway(T const& val) {
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #    include <algorithm> // sort, reverse
-#    include <atomic>    // compare_exchange_strong in loop overhead
+#    include <cmath>
+#    include <compare>
 #    include <cstdlib>   // getenv
-#    include <cstring>   // strstr, strncmp
 #    include <fstream>   // ifstream to parse proc files
+#    include <functional>
 #    include <iomanip>   // setw, setprecision
 #    include <iostream>  // cout
+#    include <iterator>
+#    include <locale>
 #    include <numeric>   // accumulate
 #    include <random>    // random_device
 #    include <sstream>   // to_s in Number
@@ -1321,17 +1398,21 @@ void doNotOptimizeAway(T const& val) {
 #        include <linux/perf_event.h>
 #        include <sys/ioctl.h>
 #        include <sys/syscall.h>
+#        include <sys/types.h>
 #    endif
 
 // declarations ///////////////////////////////////////////////////////////////////////////////////
+
+// As definitions follow these declarations within this
+// header, IWYU considers some of them redundant and
+// suggests removing them. Disable this IWYU behavior.
+// IWYU pragma: begin_keep
 
 namespace ankerl {
 namespace nanobench {
 
 // helper stuff that is only intended to be used internally
 namespace detail {
-
-struct TableInfo;
 
 // formatting utilities
 namespace fmt {
@@ -1346,6 +1427,8 @@ class MarkDownCode;
 } // namespace detail
 } // namespace nanobench
 } // namespace ankerl
+
+// IWYU pragma: end_keep
 
 // definitions ////////////////////////////////////////////////////////////////////////////////////
 

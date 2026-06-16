@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2017-2022 The Bitcoin Core developers
+# Copyright (c) 2017-present The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test that the wallet can send and receive using all combinations of address types.
@@ -78,7 +78,6 @@ class AddressTypeTest(BitcoinTestFramework):
         ]
         # whitelist peers to speed up tx relay / mempool sync
         self.noban_tx_relay = True
-        self.supports_cli = False
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_wallet()
@@ -177,12 +176,12 @@ class AddressTypeTest(BitcoinTestFramework):
         # Verify the descriptor checksum against the Python implementation
         assert descsum_check(info['desc'])
         # Verify that stripping the checksum and recreating it using Python roundtrips
-        assert info['desc'] == descsum_create(info['desc'][:-9])
+        assert_equal(info['desc'], descsum_create(info['desc'][:-9]))
         # Verify that stripping the checksum and feeding it to getdescriptorinfo roundtrips
-        assert info['desc'] == self.nodes[0].getdescriptorinfo(info['desc'][:-9])['descriptor']
+        assert_equal(info['desc'], self.nodes[0].getdescriptorinfo(info['desc'][:-9])['descriptor'])
         assert_equal(info['desc'][-8:], self.nodes[0].getdescriptorinfo(info['desc'][:-9])['checksum'])
         # Verify that keeping the checksum and feeding it to getdescriptorinfo roundtrips
-        assert info['desc'] == self.nodes[0].getdescriptorinfo(info['desc'])['descriptor']
+        assert_equal(info['desc'], self.nodes[0].getdescriptorinfo(info['desc'])['descriptor'])
         assert_equal(info['desc'][-8:], self.nodes[0].getdescriptorinfo(info['desc'])['checksum'])
 
         if not multisig and typ == 'legacy':
@@ -260,9 +259,11 @@ class AddressTypeTest(BitcoinTestFramework):
                     else:
                         address = self.nodes[to_node].getnewaddress(address_type=address_type)
                 else:
-                    addr1 = self.nodes[to_node].getnewaddress()
-                    addr2 = self.nodes[to_node].getnewaddress()
-                    address = self.nodes[to_node].addmultisigaddress(2, [addr1, addr2])['address']
+                    pubkey1 = self.nodes[to_node].getaddressinfo(self.nodes[to_node].getnewaddress())["pubkey"]
+                    pubkey2 = self.nodes[to_node].getaddressinfo(self.nodes[to_node].getnewaddress())["pubkey"]
+                    ms = self.nodes[to_node].createmultisig(2, [pubkey1, pubkey2])
+                    import_res = self.nodes[to_node].importdescriptors([{"desc": ms["descriptor"], "timestamp": 0}])
+                    assert_equal(import_res[0]["success"], True)
 
                 # Do some sanity checking on the created address
                 if address_type is not None:
@@ -344,7 +345,7 @@ class AddressTypeTest(BitcoinTestFramework):
         self.test_address(3, self.nodes[3].getrawchangeaddress(), multisig=False, typ='bech32')
 
         self.log.info('test invalid address type arguments')
-        assert_raises_rpc_error(-5, "Unknown address type ''", self.nodes[3].addmultisigaddress, 2, [compressed_1, compressed_2], None, '')
+        assert_raises_rpc_error(-5, "Unknown address type ''", self.nodes[3].createmultisig, 2, [compressed_1, compressed_2], address_type="")
         assert_raises_rpc_error(-5, "Unknown address type ''", self.nodes[3].getnewaddress, None, '')
         assert_raises_rpc_error(-5, "Unknown address type ''", self.nodes[3].getrawchangeaddress, '')
         assert_raises_rpc_error(-5, "Unknown address type 'bech23'", self.nodes[3].getrawchangeaddress, 'bech23')

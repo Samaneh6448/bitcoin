@@ -1,48 +1,62 @@
-// Copyright (c) 2019-2022 The Bitcoin Core developers
+// Copyright (c) 2019-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <test/util/mining.h>
 
+#include <addresstype.h>
+#include <chain.h>
 #include <chainparams.h>
 #include <consensus/merkle.h>
 #include <consensus/validation.h>
+#include <interfaces/mining.h>
 #include <key_io.h>
 #include <node/context.h>
 #include <pow.h>
+#include <primitives/block.h>
 #include <primitives/transaction.h>
+#include <script/script.h>
+#include <sync.h>
 #include <test/util/script.h>
+#include <uint256.h>
 #include <util/check.h>
 #include <validation.h>
 #include <validationinterface.h>
 #include <versionbits.h>
 
-using node::BlockAssembler;
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <utility>
+
 using node::NodeContext;
 
 COutPoint generatetoaddress(const NodeContext& node, const std::string& address)
 {
     const auto dest = DecodeDestination(address);
     assert(IsValidDestination(dest));
-    BlockAssembler::Options assembler_options;
-    assembler_options.coinbase_output_script = GetScriptForDestination(dest);
-
-    return MineBlock(node, assembler_options);
+    return MineBlock(node, {
+        .coinbase_output_script = GetScriptForDestination(dest),
+    });
 }
 
 std::vector<std::shared_ptr<CBlock>> CreateBlockChain(size_t total_height, const CChainParams& params)
 {
     std::vector<std::shared_ptr<CBlock>> ret{total_height};
     auto time{params.GenesisBlock().nTime};
+    // NOTE: here `height` does not correspond to the block height but the block height - 1.
     for (size_t height{0}; height < total_height; ++height) {
         CBlock& block{*(ret.at(height) = std::make_shared<CBlock>())};
 
         CMutableTransaction coinbase_tx;
+        coinbase_tx.nLockTime = static_cast<uint32_t>(height);
         coinbase_tx.vin.resize(1);
         coinbase_tx.vin[0].prevout.SetNull();
+        coinbase_tx.vin[0].nSequence = CTxIn::MAX_SEQUENCE_NONFINAL; // Make sure timelock is enforced.
         coinbase_tx.vout.resize(1);
         coinbase_tx.vout[0].scriptPubKey = P2WSH_OP_TRUE;
         coinbase_tx.vout[0].nValue = GetBlockSubsidy(height + 1, params.GetConsensus());
+        // Always include OP_0 as a dummy extraNonce.
         coinbase_tx.vin[0].scriptSig = CScript() << (height + 1) << OP_0;
         block.vtx = {MakeTransactionRef(std::move(coinbase_tx))};
 
@@ -61,7 +75,7 @@ std::vector<std::shared_ptr<CBlock>> CreateBlockChain(size_t total_height, const
     return ret;
 }
 
-COutPoint MineBlock(const NodeContext& node, const node::BlockAssembler::Options& assembler_options)
+COutPoint MineBlock(const NodeContext& node, const node::BlockCreateOptions& assembler_options)
 {
     auto block = PrepareBlock(node, assembler_options);
     auto valid = MineBlock(node, block);
@@ -78,9 +92,9 @@ struct BlockValidationStateCatcher : public CValidationInterface {
           m_state{} {}
 
 protected:
-    void BlockChecked(const CBlock& block, const BlockValidationState& state) override
+    void BlockChecked(const std::shared_ptr<const CBlock>& block, const BlockValidationState& state) override
     {
-        if (block.GetHash() != m_hash) return;
+        if (block->GetHash() != m_hash) return;
         m_state = state;
     }
 };
@@ -115,23 +129,15 @@ COutPoint ProcessBlock(const NodeContext& node, const std::shared_ptr<CBlock>& b
 }
 
 std::shared_ptr<CBlock> PrepareBlock(const NodeContext& node,
-                                     const BlockAssembler::Options& assembler_options)
+                                     const node::BlockCreateOptions& assembler_options)
 {
-    auto block = std::make_shared<CBlock>(
-        BlockAssembler{Assert(node.chainman)->ActiveChainstate(), Assert(node.mempool.get()), assembler_options}
-            .CreateNewBlock()
-            ->block);
+    auto mining = interfaces::MakeMining(node);
+    auto block_template = mining->createNewBlock(assembler_options, /*cooldown=*/false);
+    auto block = std::make_shared<CBlock>(Assert(block_template)->getBlock());
 
     LOCK(cs_main);
     block->nTime = Assert(node.chainman)->ActiveChain().Tip()->GetMedianTimePast() + 1;
     block->hashMerkleRoot = BlockMerkleRoot(*block);
 
     return block;
-}
-std::shared_ptr<CBlock> PrepareBlock(const NodeContext& node, const CScript& coinbase_scriptPubKey)
-{
-    BlockAssembler::Options assembler_options;
-    assembler_options.coinbase_output_script = coinbase_scriptPubKey;
-    ApplyArgsManOptions(*node.args, assembler_options);
-    return PrepareBlock(node, assembler_options);
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2022 The Bitcoin Core developers
+// Copyright (c) 2022-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -11,18 +11,19 @@
 #include <script/signingprovider.h>
 #include <sync.h>
 #include <test/util/setup_common.h>
+#include <util/check.h>
 #include <wallet/context.h>
 #include <wallet/db.h>
 #include <wallet/test/util.h>
-#include <wallet/types.h>
 #include <wallet/wallet.h>
 #include <wallet/walletutil.h>
 
-#include <cassert>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace wallet {
 static void WalletIsMine(benchmark::Bench& bench, int num_combo = 0)
@@ -37,7 +38,7 @@ static void WalletIsMine(benchmark::Bench& bench, int num_combo = 0)
     // Loading the wallet will also create it
     uint64_t create_flags = WALLET_FLAG_DESCRIPTORS;
     auto database = CreateMockableWalletDatabase();
-    auto wallet = TestLoadWallet(std::move(database), context, create_flags);
+    auto wallet = TestCreateWallet(std::move(database), context, create_flags);
 
     // For a descriptor wallet, fill with num_combo combo descriptors with random keys
     // This benchmarks a non-HD wallet migrated to descriptors
@@ -50,8 +51,7 @@ static void WalletIsMine(benchmark::Bench& bench, int num_combo = 0)
             std::string error;
             std::vector<std::unique_ptr<Descriptor>> desc = Parse("combo(" + EncodeSecret(key) + ")", keys, error, /*require_checksum=*/false);
             WalletDescriptor w_desc(std::move(desc.at(0)), /*creation_time=*/0, /*range_start=*/0, /*range_end=*/0, /*next_index=*/0);
-            auto spk_manager = *Assert(wallet->AddWalletDescriptor(w_desc, keys, /*label=*/"", /*internal=*/false));
-            assert(spk_manager);
+            Assert(wallet->AddWalletDescriptor(w_desc, keys, /*label=*/"", /*internal=*/false));
         }
     }
 
@@ -59,8 +59,8 @@ static void WalletIsMine(benchmark::Bench& bench, int num_combo = 0)
 
     bench.run([&] {
         LOCK(wallet->cs_wallet);
-        isminetype mine = wallet->IsMine(script);
-        assert(mine == ISMINE_NO);
+        bool mine = wallet->IsMine(script);
+        assert(!mine);
     });
 
     TestUnloadWallet(std::move(wallet));
@@ -68,6 +68,6 @@ static void WalletIsMine(benchmark::Bench& bench, int num_combo = 0)
 
 static void WalletIsMineDescriptors(benchmark::Bench& bench) { WalletIsMine(bench); }
 static void WalletIsMineMigratedDescriptors(benchmark::Bench& bench) { WalletIsMine(bench, /*num_combo=*/2000); }
-BENCHMARK(WalletIsMineDescriptors, benchmark::PriorityLevel::LOW);
-BENCHMARK(WalletIsMineMigratedDescriptors, benchmark::PriorityLevel::LOW);
+BENCHMARK(WalletIsMineDescriptors);
+BENCHMARK(WalletIsMineMigratedDescriptors);
 } // namespace wallet

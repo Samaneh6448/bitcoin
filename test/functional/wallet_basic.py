@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2014-2022 The Bitcoin Core developers
+# Copyright (c) 2014-present The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the wallet."""
@@ -32,7 +32,7 @@ class WalletTest(BitcoinTestFramework):
         # whitelist peers to speed up tx relay / mempool sync
         self.noban_tx_relay = True
         self.extra_args = [[
-            "-dustrelayfee=0", "-walletrejectlongchains=0", "-deprecatedrpc=settxfee"
+            "-dustrelayfee=0", "-walletrejectlongchains=0"
         ]] * self.num_nodes
         self.setup_clean_chain = True
         self.supports_cli = False
@@ -69,9 +69,9 @@ class WalletTest(BitcoinTestFramework):
 
         self.generate(self.nodes[0], 1, sync_fun=self.no_op)
 
-        walletinfo = self.nodes[0].getwalletinfo()
-        assert_equal(walletinfo['immature_balance'], 50)
-        assert_equal(walletinfo['balance'], 0)
+        balances = self.nodes[0].getbalances()
+        assert_equal(balances["mine"]["immature"], 50)
+        assert_equal(balances["mine"]["trusted"], 0)
 
         self.sync_all(self.nodes[0:3])
         self.generate(self.nodes[1], COINBASE_MATURITY + 1, sync_fun=lambda: self.sync_all(self.nodes[0:3]))
@@ -118,8 +118,7 @@ class WalletTest(BitcoinTestFramework):
         # but 10 will go to node2 and the rest will go to node0
         balance = self.nodes[0].getbalance()
         assert_equal(set([txout1['value'], txout2['value']]), set([10, balance]))
-        walletinfo = self.nodes[0].getwalletinfo()
-        assert_equal(walletinfo['immature_balance'], 0)
+        assert_equal(self.nodes[0].getbalances()["mine"]["immature"], 0)
 
         # Have node0 mine a block, thus it will collect its own fee.
         self.generate(self.nodes[0], 1, sync_fun=lambda: self.sync_all(self.nodes[0:3]))
@@ -241,14 +240,14 @@ class WalletTest(BitcoinTestFramework):
         # Send 10 BTC normal
         address = self.nodes[0].getnewaddress("test")
         fee_per_byte = Decimal('0.001') / 1000
-        self.nodes[2].settxfee(fee_per_byte * 1000)
-        txid = self.nodes[2].sendtoaddress(address, 10, "", "", False)
+        fee_rate_sat_vb = fee_per_byte * Decimal(1e8)
+        txid = self.nodes[2].sendtoaddress(address, 10, "", "", False, fee_rate=fee_rate_sat_vb)
         self.generate(self.nodes[2], 1, sync_fun=lambda: self.sync_all(self.nodes[0:3]))
         node_2_bal = self.check_fee_amount(self.nodes[2].getbalance(), Decimal('84'), fee_per_byte, self.get_vsize(self.nodes[2].gettransaction(txid)['hex']))
         assert_equal(self.nodes[0].getbalance(), Decimal('10'))
 
         # Send 10 BTC with subtract fee from amount
-        txid = self.nodes[2].sendtoaddress(address, 10, "", "", True)
+        txid = self.nodes[2].sendtoaddress(address, 10, "", "", True, fee_rate=fee_rate_sat_vb)
         self.generate(self.nodes[2], 1, sync_fun=lambda: self.sync_all(self.nodes[0:3]))
         node_2_bal -= Decimal('10')
         assert_equal(self.nodes[2].getbalance(), node_2_bal)
@@ -257,14 +256,14 @@ class WalletTest(BitcoinTestFramework):
         self.log.info("Test sendmany")
 
         # Sendmany 10 BTC
-        txid = self.nodes[2].sendmany('', {address: 10}, 0, "", [])
+        txid = self.nodes[2].sendmany('', {address: 10}, 0, "", [], fee_rate=fee_rate_sat_vb)
         self.generate(self.nodes[2], 1, sync_fun=lambda: self.sync_all(self.nodes[0:3]))
         node_0_bal += Decimal('10')
         node_2_bal = self.check_fee_amount(self.nodes[2].getbalance(), node_2_bal - Decimal('10'), fee_per_byte, self.get_vsize(self.nodes[2].gettransaction(txid)['hex']))
         assert_equal(self.nodes[0].getbalance(), node_0_bal)
 
         # Sendmany 10 BTC with subtract fee from amount
-        txid = self.nodes[2].sendmany('', {address: 10}, 0, "", [address])
+        txid = self.nodes[2].sendmany('', {address: 10}, 0, "", [address], fee_rate=fee_rate_sat_vb)
         self.generate(self.nodes[2], 1, sync_fun=lambda: self.sync_all(self.nodes[0:3]))
         node_2_bal -= Decimal('10')
         assert_equal(self.nodes[2].getbalance(), node_2_bal)
@@ -273,7 +272,7 @@ class WalletTest(BitcoinTestFramework):
         # Sendmany 5 BTC to two addresses with subtracting fee from both addresses
         a0 = self.nodes[0].getnewaddress()
         a1 = self.nodes[0].getnewaddress()
-        txid = self.nodes[2].sendmany(dummy='', amounts={a0: 5, a1: 5}, subtractfeefrom=[a0, a1])
+        txid = self.nodes[2].sendmany(dummy='', amounts={a0: 5, a1: 5}, subtractfeefrom=[a0, a1], fee_rate=fee_rate_sat_vb)
         self.generate(self.nodes[2], 1, sync_fun=lambda: self.sync_all(self.nodes[0:3]))
         node_2_bal -= Decimal('10')
         assert_equal(self.nodes[2].getbalance(), node_2_bal)
@@ -335,7 +334,7 @@ class WalletTest(BitcoinTestFramework):
 
         self.log.info("Test sendmany raises if an invalid conf_target or estimate_mode is passed")
         for target, mode in product([-1, 0, 1009], ["economical", "conservative"]):
-            assert_raises_rpc_error(-8, "Invalid conf_target, must be between 1 and 1008",  # max value of 1008 per src/policy/fees.h
+            assert_raises_rpc_error(-8, "Invalid conf_target, must be between 1 and 1008",  # max value of 1008 per src/policy/fees/block_policy_estimator.h
                 self.nodes[2].sendmany, amounts={address: 1}, conf_target=target, estimate_mode=mode)
         for target, mode in product([-1, 0], ["btc/kb", "sat/b"]):
             assert_raises_rpc_error(-8, 'Invalid estimate_mode parameter, must be one of: "unset", "economical", "conservative"',
@@ -454,23 +453,23 @@ class WalletTest(BitcoinTestFramework):
         #   - True: unicode escaped as \u....
         #   - False: unicode directly as UTF-8
         for mode in [True, False]:
-            self.nodes[0].rpc.ensure_ascii = mode
+            self.nodes[0]._rpc.ensure_ascii = mode
             # unicode check: Basic Multilingual Plane, Supplementary Plane respectively
             for label in [u'рыба', u'𝅘𝅥𝅯']:
                 addr = self.nodes[0].getnewaddress()
                 self.nodes[0].setlabel(addr, label)
                 test_address(self.nodes[0], addr, labels=[label])
                 assert label in self.nodes[0].listlabels()
-        self.nodes[0].rpc.ensure_ascii = True  # restore to default
+        self.nodes[0]._rpc.ensure_ascii = True  # restore to default
 
         # -reindex tests
         chainlimit = 6
         self.log.info("Test -reindex")
         self.stop_nodes()
         # set lower ancestor limit for later
-        self.start_node(0, ['-reindex', "-walletrejectlongchains=0", "-limitancestorcount=" + str(chainlimit)])
-        self.start_node(1, ['-reindex', "-limitancestorcount=" + str(chainlimit)])
-        self.start_node(2, ['-reindex', "-limitancestorcount=" + str(chainlimit)])
+        self.start_node(0, ['-reindex', "-walletrejectlongchains=0", "-limitancestorcount=" + str(chainlimit), "-limitclustercount=" + str(chainlimit)])
+        self.start_node(1, ['-reindex', "-limitclustercount=" + str(chainlimit)])
+        self.start_node(2, ['-reindex', "-limitclustercount=" + str(chainlimit)])
         # reindex will leave rpc warm up "early"; Wait for it to finish
         self.wait_until(lambda: [block_count] * 3 == [self.nodes[i].getblockcount() for i in range(3)])
         assert_equal(balance_nodes, [self.nodes[i].getbalance() for i in range(3)])
@@ -511,7 +510,7 @@ class WalletTest(BitcoinTestFramework):
         # Try with walletrejectlongchains
         # Double chain limit but require combining inputs, so we pass AttemptSelection
         self.stop_node(0)
-        extra_args = ["-walletrejectlongchains", "-limitancestorcount=" + str(2 * chainlimit)]
+        extra_args = ["-walletrejectlongchains", "-limitclustercount=" + str(2 * chainlimit), "-limitancestorcount=" + str(2*chainlimit)]
         self.start_node(0, extra_args=extra_args)
 
         # wait until the wallet has submitted all transactions to the mempool
@@ -522,7 +521,7 @@ class WalletTest(BitcoinTestFramework):
 
         node0_balance = self.nodes[0].getbalance()
         # With walletrejectlongchains we will not create the tx and store it in our wallet.
-        assert_raises_rpc_error(-6, f"too many unconfirmed ancestors [limit: {chainlimit * 2}]", self.nodes[0].sendtoaddress, sending_addr, node0_balance - Decimal('0.01'))
+        assert_raises_rpc_error(-6, "too many unconfirmed transactions in cluster", self.nodes[0].sendtoaddress, sending_addr, node0_balance - Decimal('0.01'))
 
         # Verify nothing new in wallet
         assert_equal(total_txs, len(self.nodes[0].listtransactions("*", 99999)))
@@ -533,7 +532,6 @@ class WalletTest(BitcoinTestFramework):
         assert_equal(address_info['address'], "mneYUmWYsuk7kySiURxCi3AGxrAqZxLgPZ")
         assert_equal(address_info["scriptPubKey"], "76a9144e3854046c7bd1594ac904e4793b6a45b36dea0988ac")
         assert not address_info["ismine"]
-        assert not address_info["iswatchonly"]
         assert not address_info["isscript"]
         assert not address_info["ischange"]
 
@@ -542,13 +540,16 @@ class WalletTest(BitcoinTestFramework):
         destination = self.nodes[1].getnewaddress()
         txid = self.nodes[0].sendtoaddress(destination, 0.123)
         tx = self.nodes[0].gettransaction(txid=txid, verbose=True)['decoded']
-        output_addresses = [vout['scriptPubKey']['address'] for vout in tx["vout"]]
-        assert len(output_addresses) > 1
-        for address in output_addresses:
+        assert len(tx["vout"]) > 1
+        for vout in tx["vout"]:
+            address = vout['scriptPubKey']['address']
             ischange = self.nodes[0].getaddressinfo(address)['ischange']
             assert_equal(ischange, address != destination)
             if ischange:
                 change = address
+                assert vout["ischange"]
+            else:
+                assert "ischange" not in vout
         self.nodes[0].setlabel(change, 'foobar')
         assert_equal(self.nodes[0].getaddressinfo(change)['ischange'], False)
 
@@ -561,7 +562,7 @@ class WalletTest(BitcoinTestFramework):
                                  "amount":   baz["amount"],
                                  "category": baz["category"],
                                  "vout":     baz["vout"]}
-        expected_fields = frozenset({'amount', 'bip125-replaceable', 'confirmations', 'details', 'fee',
+        expected_fields = frozenset({'amount', 'confirmations', 'details', 'fee',
                                      'hex', 'lastprocessedblock', 'time', 'timereceived', 'trusted', 'txid', 'wtxid', 'walletconflicts', 'mempoolconflicts'})
         verbose_field = "decoded"
         expected_verbose_fields = expected_fields | {verbose_field}
@@ -603,8 +604,10 @@ class WalletTest(BitcoinTestFramework):
         txid_a = self.nodes[0].sendtoaddress(addr_a, 0.01)
         txid_b = self.nodes[0].sendtoaddress(addr_b, 0.01)
         self.generate(self.nodes[0], 1, sync_fun=self.no_op)
+        # Prevent race of listunspent with outstanding TxAddedToMempool notifications
+        self.nodes[0].syncwithvalidationinterfacequeue()
         # Now import the descriptors, make sure we can identify on which descriptor each coin was received.
-        self.nodes[0].createwallet(wallet_name="wo", descriptors=True, disable_private_keys=True)
+        self.nodes[0].createwallet(wallet_name="wo", disable_private_keys=True)
         wo_wallet = self.nodes[0].get_wallet_rpc("wo")
         wo_wallet.importdescriptors([
             {
@@ -654,6 +657,9 @@ class WalletTest(BitcoinTestFramework):
 
         # check that it works again with -spendzeroconfchange set (=default)
         self.restart_node(0, ["-spendzeroconfchange=1"])
+        # Make sure the wallet knows the tx in the mempool
+        self.nodes[0].syncwithvalidationinterfacequeue()
+
         zeroconf_wallet = self.nodes[0].get_wallet_rpc("zeroconf")
         utxos = zeroconf_wallet.listunspent(minconf=0)
         assert_equal(len(utxos), 1)
@@ -673,7 +679,8 @@ class WalletTest(BitcoinTestFramework):
         self.generate(self.wallet, 1, sync_fun=self.no_op)
         self.nodes[0].createwallet("watch_wallet", disable_private_keys=True)
         watch_wallet = self.nodes[0].get_wallet_rpc("watch_wallet")
-        watch_wallet.importaddress(self.wallet.get_address())
+        import_res = watch_wallet.importdescriptors([{"desc": self.wallet.get_descriptor(), "timestamp": "now"}])
+        assert_equal(import_res[0]["success"], True)
 
         # DEFAULT_ANCESTOR_LIMIT transactions off a confirmed tx should be fine
         chain = self.wallet.create_self_transfer_chain(chain_length=DEFAULT_ANCESTOR_LIMIT)

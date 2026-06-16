@@ -1,4 +1,4 @@
-// Copyright (c) 2022 The Bitcoin Core developers
+// Copyright (c) 2022-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -11,11 +11,9 @@
 namespace wallet {
 namespace {
 
-const TestingSetup* g_setup;
 void initialize_crypter()
 {
     static const auto testing_setup = MakeNoLogFileContext<const TestingSetup>();
-    g_setup = testing_setup.get();
 }
 
 FUZZ_TARGET(crypter, .init = initialize_crypter)
@@ -39,7 +37,7 @@ FUZZ_TARGET(crypter, .init = initialize_crypter)
         // Limiting the value of rounds since it is otherwise uselessly expensive and causes a timeout when fuzzing.
         crypt.SetKeyFromPassphrase(/*key_data=*/secure_string,
                                    /*salt=*/ConsumeFixedLengthByteVector(fuzzed_data_provider, WALLET_CRYPTO_SALT_SIZE),
-                                   /*rounds=*/fuzzed_data_provider.ConsumeIntegralInRange<unsigned int>(0, 25000),
+                                   /*rounds=*/fuzzed_data_provider.ConsumeIntegralInRange<unsigned int>(0, CMasterKey::DEFAULT_DERIVE_ITERATIONS),
                                    /*derivation_method=*/derivation_method);
     }
 

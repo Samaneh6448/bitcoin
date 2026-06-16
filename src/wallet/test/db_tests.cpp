@@ -4,6 +4,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <test/util/common.h>
 #include <test/util/setup_common.h>
 #include <util/check.h>
 #include <util/fs.h>
@@ -11,11 +12,15 @@
 #include <wallet/sqlite.h>
 #include <wallet/migrate.h>
 #include <wallet/test/util.h>
-#include <wallet/walletutil.h> // for WALLET_FLAG_DESCRIPTORS
+#include <wallet/walletutil.h>
 
-#include <fstream>
+#include <cstddef>
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 inline std::ostream& operator<<(std::ostream& os, const std::pair<const SerializeData, SerializeData>& kv)
 {

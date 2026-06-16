@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2014-2022 The Bitcoin Core developers
+# Copyright (c) 2014-present The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the wallet accounts properly when there is a double-spend conflict."""
@@ -14,7 +14,6 @@ from test_framework.util import (
 class TxnMallTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 3
-        self.supports_cli = False
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_wallet()
@@ -44,7 +43,7 @@ class TxnMallTest(BitcoinTestFramework):
         # blockchain sync later in the test when nodes are connected, due to
         # timing issues.
         for n in self.nodes:
-            assert n.getblockchaininfo()["initialblockdownload"] == False
+            assert_equal(n.getblockchaininfo()["initialblockdownload"], False)
 
         for i in range(3):
             assert_equal(self.nodes[i].getbalance(), starting_balance)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2017-2022 The Bitcoin Core developers
+# Copyright (c) 2017-present The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """An example functional test
@@ -17,7 +17,6 @@ from collections import defaultdict
 # Use lexicographically sorted multi-line imports
 from test_framework.blocktools import (
     create_block,
-    create_coinbase,
 )
 from test_framework.messages import (
     CInv,
@@ -57,8 +56,7 @@ class BaseNode(P2PInterface):
         """Override the standard on_block callback
 
         Store the hash of a received block in the dictionary."""
-        message.block.calc_sha256()
-        self.block_receive_map[message.block.sha256] += 1
+        self.block_receive_map[message.block.hash_int] += 1
 
     def on_inv(self, message):
         """Override the standard on_inv callback"""
@@ -177,12 +175,12 @@ class ExampleTest(BitcoinTestFramework):
             # Use the blocktools functionality to manually build a block.
             # Calling the generate() rpc is easier, but this allows us to exactly
             # control the blocks and transactions.
-            block = create_block(self.tip, create_coinbase(height+1), self.block_time)
+            block = create_block(self.tip, height=height+1, ntime=self.block_time)
             block.solve()
             block_message = msg_block(block)
             # Send message is used to send a P2P message to the node over our P2PInterface
             peer_messaging.send_without_ping(block_message)
-            self.tip = block.sha256
+            self.tip = block.hash_int
             blocks.append(self.tip)
             self.block_time += 1
             height += 1

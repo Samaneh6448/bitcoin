@@ -5,10 +5,12 @@
 #include <hash.h>
 #include <serialize.h>
 #include <streams.h>
+#include <test/util/common.h>
 #include <test/util/setup_common.h>
 #include <util/strencodings.h>
 
-#include <stdint.h>
+#include <algorithm>
+#include <cstdint>
 #include <string>
 
 #include <boost/test/unit_test.hpp>
@@ -238,6 +240,40 @@ BOOST_AUTO_TEST_CASE(noncanonical)
     // 0x01ffffff encoded with nine bytes:
     ss << std::span{"\xff\xff\xff\xff\x01\x00\x00\x00\x00"}.first(9);
     BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure, isCanonicalException);
+}
+
+BOOST_AUTO_TEST_CASE(string_view)
+{
+    const std::string_view sv{"hello, world"};
+    DataStream ss;
+    ss << sv;
+    std::string s;
+    ss >> s;
+    BOOST_CHECK_EQUAL(sv, s);
+}
+
+BOOST_AUTO_TEST_CASE(limited_vector)
+{
+    const std::vector<int> v = {1,2,3,4,-5,-6,-7,-8,-9,-10,10000,20000,-30000};
+
+    auto check = [&]<size_t N>() {
+        DataStream ss;
+        ss << v;
+        try {
+            std::vector<int> r;
+            ss >> LIMITED_VECTOR(r, N);
+            BOOST_CHECK_LE(r.size(), N);
+            BOOST_CHECK(std::ranges::equal(r, v));
+        } catch (const std::ios_base::failure&) {
+            BOOST_CHECK_GT(v.size(), N);
+        }
+    };
+    check.operator()<0>();
+    check.operator()<10>();
+    check.operator()<12>();
+    check.operator()<13>();
+    check.operator()<14>();
+    check.operator()<100>();
 }
 
 BOOST_AUTO_TEST_CASE(class_methods)

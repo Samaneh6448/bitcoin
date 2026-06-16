@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2017-2022 The Bitcoin Core developers
+# Copyright (c) 2017-present The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the listsinceblock RPC."""
@@ -13,6 +13,7 @@ from test_framework.util import (
     assert_array_result,
     assert_equal,
     assert_raises_rpc_error,
+    wallet_importprivkey,
 )
 from test_framework.wallet_util import generate_keypair
 
@@ -227,10 +228,10 @@ class ListSinceBlockTest(BitcoinTestFramework):
         address = key_to_p2wpkh(pubkey)
         self.nodes[2].sendtoaddress(address, 10)
         self.generate(self.nodes[2], 6)
-        self.nodes[2].importprivkey(privkey)
+        wallet_importprivkey(self.nodes[2], privkey, "now")
         utxos = self.nodes[2].listunspent()
         utxo = [u for u in utxos if u["address"] == address][0]
-        self.nodes[1].importprivkey(privkey)
+        wallet_importprivkey(self.nodes[1], privkey, "now")
 
         # Split network into two
         self.split_network()
@@ -271,7 +272,7 @@ class ListSinceBlockTest(BitcoinTestFramework):
 
         # listsinceblock(lastblockhash) should now include txid1, as seen from nodes[0]
         lsbres = self.nodes[0].listsinceblock(lastblockhash)
-        assert any(tx['txid'] == txid1 for tx in lsbres['removed'])
+        assert txid1 in [tx['txid'] for tx in lsbres['removed']]
 
         # but it should not include 'removed' if include_removed=false
         lsbres2 = self.nodes[0].listsinceblock(blockhash=lastblockhash, include_removed=False)
@@ -353,8 +354,8 @@ class ListSinceBlockTest(BitcoinTestFramework):
         # listsinceblock(lastblockhash) should now include txid1 in transactions
         # as well as in removed
         lsbres = self.nodes[0].listsinceblock(lastblockhash)
-        assert any(tx['txid'] == txid1 for tx in lsbres['transactions'])
-        assert any(tx['txid'] == txid1 for tx in lsbres['removed'])
+        assert txid1 in [tx['txid'] for tx in lsbres['transactions']]
+        assert txid1 in [tx['txid'] for tx in lsbres['removed']]
 
         # find transaction and ensure confirmations is valid
         for tx in lsbres['transactions']:
@@ -420,7 +421,7 @@ class ListSinceBlockTest(BitcoinTestFramework):
         # Create a watchonly wallet tracking two multisig descriptors.
         multi_a = descsum_create("wsh(multi(1,tpubD6NzVbkrYhZ4YBNjUo96Jxd1u4XKWgnoc7LsA1jz3Yc2NiDbhtfBhaBtemB73n9V5vtJHwU6FVXwggTbeoJWQ1rzdz8ysDuQkpnaHyvnvzR/*,tpubD6NzVbkrYhZ4YHdDGMAYGaWxMSC1B6tPRTHuU5t3BcfcS3nrF523iFm5waFd1pP3ZvJt4Jr8XmCmsTBNx5suhcSgtzpGjGMASR3tau1hJz4/*))")
         multi_b = descsum_create("wsh(multi(1,tpubD6NzVbkrYhZ4YHdDGMAYGaWxMSC1B6tPRTHuU5t3BcfcS3nrF523iFm5waFd1pP3ZvJt4Jr8XmCmsTBNx5suhcSgtzpGjGMASR3tau1hJz4/*,tpubD6NzVbkrYhZ4Y2RLiuEzNQkntjmsLpPYDm3LTRBYynUQtDtpzeUKAcb9sYthSFL3YR74cdFgF5mW8yKxv2W2CWuZDFR2dUpE5PF9kbrVXNZ/*))")
-        self.nodes[0].createwallet(wallet_name="wo", descriptors=True, disable_private_keys=True)
+        self.nodes[0].createwallet(wallet_name="wo", disable_private_keys=True)
         wo_wallet = self.nodes[0].get_wallet_rpc("wo")
         wo_wallet.importdescriptors([
             {
@@ -462,14 +463,14 @@ class ListSinceBlockTest(BitcoinTestFramework):
 
         # If we don't list change, we won't have an entry for it.
         coins = self.nodes[2].listsinceblock(blockhash=block_hash)["transactions"]
-        assert not any(c["address"] == addr for c in coins)
+        assert addr not in [c["address"] for c in coins]
 
         # Now if we list change, we'll get both the send (to a change address) and
         # the actual change.
         res = self.nodes[2].listsinceblock(blockhash=block_hash, include_change=True)
         coins = [entry for entry in res["transactions"] if entry["category"] == "receive"]
         assert_equal(len(coins), 2)
-        assert any(c["address"] == addr for c in coins)
+        assert addr in [c["address"] for c in coins]
         assert all(self.nodes[2].getaddressinfo(c["address"])["ischange"] for c in coins)
 
     def test_op_return(self):

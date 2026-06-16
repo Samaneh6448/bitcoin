@@ -9,7 +9,6 @@
 #ifndef BITCOIN_UTIL_STRENCODINGS_H
 #define BITCOIN_UTIL_STRENCODINGS_H
 
-#include <crypto/hex_base.h> // IWYU pragma: export
 #include <span.h>
 #include <util/string.h>
 
@@ -20,8 +19,9 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
-#include <string>      // IWYU pragma: export
-#include <string_view> // IWYU pragma: export
+#include <span>
+#include <string>
+#include <string_view>
 #include <system_error>
 #include <type_traits>
 #include <vector>
@@ -105,8 +105,7 @@ bool SplitHostPort(std::string_view in, uint16_t& portOut, std::string& hostOut)
 
 // LocaleIndependentAtoi is provided for backwards compatibility reasons.
 //
-// New code should use ToIntegral or the ParseInt* functions
-// which provide parse error feedback.
+// New code should use ToIntegral.
 //
 // The goal of LocaleIndependentAtoi is to replicate the defined behaviour of
 // std::atoi as it behaves under the "C" locale, and remove some undefined
@@ -170,64 +169,23 @@ constexpr inline bool IsSpace(char c) noexcept {
 /**
  * Convert string to integral type T. Leading whitespace, a leading +, or any
  * trailing character fail the parsing. The required format expressed as regex
- * is `-?[0-9]+`. The minus sign is only permitted for signed integer types.
+ * is `-?[0-9]+` by default (or `-?[0-9a-fA-F]+` if base = 16).
+ * The minus sign is only permitted for signed integer types.
  *
  * @returns std::nullopt if the entire string could not be parsed, or if the
  *   parsed value is not in the range representable by the type T.
  */
 template <typename T>
-std::optional<T> ToIntegral(std::string_view str)
+std::optional<T> ToIntegral(std::string_view str, size_t base = 10)
 {
     static_assert(std::is_integral_v<T>);
     T result;
-    const auto [first_nonmatching, error_condition] = std::from_chars(str.data(), str.data() + str.size(), result);
+    const auto [first_nonmatching, error_condition] = std::from_chars(str.data(), str.data() + str.size(), result, base);
     if (first_nonmatching != str.data() + str.size() || error_condition != std::errc{}) {
         return std::nullopt;
     }
     return result;
 }
-
-/**
- * Convert string to signed 32-bit integer with strict parse error feedback.
- * @returns true if the entire string could be parsed as valid integer,
- *   false if not the entire string could be parsed or when overflow or underflow occurred.
- */
-[[nodiscard]] bool ParseInt32(std::string_view str, int32_t *out);
-
-/**
- * Convert string to signed 64-bit integer with strict parse error feedback.
- * @returns true if the entire string could be parsed as valid integer,
- *   false if not the entire string could be parsed or when overflow or underflow occurred.
- */
-[[nodiscard]] bool ParseInt64(std::string_view str, int64_t *out);
-
-/**
- * Convert decimal string to unsigned 8-bit integer with strict parse error feedback.
- * @returns true if the entire string could be parsed as valid integer,
- *   false if not the entire string could be parsed or when overflow or underflow occurred.
- */
-[[nodiscard]] bool ParseUInt8(std::string_view str, uint8_t *out);
-
-/**
- * Convert decimal string to unsigned 16-bit integer with strict parse error feedback.
- * @returns true if the entire string could be parsed as valid integer,
- *   false if the entire string could not be parsed or if overflow or underflow occurred.
- */
-[[nodiscard]] bool ParseUInt16(std::string_view str, uint16_t* out);
-
-/**
- * Convert decimal string to unsigned 32-bit integer with strict parse error feedback.
- * @returns true if the entire string could be parsed as valid integer,
- *   false if not the entire string could be parsed or when overflow or underflow occurred.
- */
-[[nodiscard]] bool ParseUInt32(std::string_view str, uint32_t *out);
-
-/**
- * Convert decimal string to unsigned 64-bit integer with strict parse error feedback.
- * @returns true if the entire string could be parsed as valid integer,
- *   false if not the entire string could be parsed or when overflow or underflow occurred.
- */
-[[nodiscard]] bool ParseUInt64(std::string_view str, uint64_t *out);
 
 /**
  * Format a paragraph of text to a fixed width, adding spaces for
@@ -366,6 +324,14 @@ std::string Capitalize(std::string str);
  *                                 if ToIntegral is false, str is empty, trailing whitespace or overflow
  */
 std::optional<uint64_t> ParseByteUnits(std::string_view str, ByteUnit default_multiplier);
+
+/**
+ *  Locale-independent, ASCII-only comparator
+ *  @param[in] s1 a string to compare
+ *  @param[in] s2 another string to compare
+ *  @returns true if s1 == s2 when both strings are converted to lowercase
+ */
+bool CaseInsensitiveEqual(std::string_view s1, std::string_view s2);
 
 namespace util {
 /** consteval version of HexDigit() without the lookup table. */

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2018-2022 The Bitcoin Core developers
+# Copyright (c) 2018-present The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test transaction time during old block rescanning
@@ -50,15 +50,23 @@ class TransactionTimeRescanTest(BitcoinTestFramework):
 
         # prepare the user wallet with 3 watch only addresses
         wo1 = usernode.getnewaddress()
+        wo1_desc = usernode.getaddressinfo(wo1)["desc"]
         wo2 = usernode.getnewaddress()
+        wo2_desc = usernode.getaddressinfo(wo2)["desc"]
         wo3 = usernode.getnewaddress()
+        wo3_desc = usernode.getaddressinfo(wo3)["desc"]
 
         usernode.createwallet(wallet_name='wo', disable_private_keys=True)
         wo_wallet = usernode.get_wallet_rpc('wo')
 
-        wo_wallet.importaddress(wo1)
-        wo_wallet.importaddress(wo2)
-        wo_wallet.importaddress(wo3)
+        import_res = wo_wallet.importdescriptors(
+            [
+                {"desc": wo1_desc, "timestamp": "now"},
+                {"desc": wo2_desc, "timestamp": "now"},
+                {"desc": wo3_desc, "timestamp": "now"},
+            ]
+        )
+        assert_equal(all([r["success"] for r in import_res]), True)
 
         self.log.info('Start transactions')
 
@@ -124,16 +132,24 @@ class TransactionTimeRescanTest(BitcoinTestFramework):
         restorenode.createwallet(wallet_name='wo', disable_private_keys=True)
         restorewo_wallet = restorenode.get_wallet_rpc('wo')
 
-        # for descriptor wallets, the test framework maps the importaddress RPC to the
-        # importdescriptors RPC (with argument 'timestamp'='now'), which always rescans
+        # importdescriptors with "timestamp": "now" always rescans
         # blocks of the past 2 hours, based on the current MTP timestamp; in order to avoid
         # importing the last address (wo3), we advance the time further and generate 10 blocks
         set_node_times(self.nodes, cur_time + ten_days + ten_days + ten_days + ten_days)
         self.generatetoaddress(minernode, 10, m1)
 
-        restorewo_wallet.importaddress(wo1, rescan=False)
-        restorewo_wallet.importaddress(wo2, rescan=False)
-        restorewo_wallet.importaddress(wo3, rescan=False)
+        import_res = restorewo_wallet.importdescriptors(
+            [
+                {"desc": wo1_desc, "timestamp": "now"},
+                {"desc": wo2_desc, "timestamp": "now"},
+                {"desc": wo3_desc, "timestamp": "now"},
+            ]
+        )
+        assert_equal(all([r["success"] for r in import_res]), True)
+
+        self.log.info('Testing abortrescan when no rescan is in progress')
+        assert_equal(restorewo_wallet.getwalletinfo()['scanning'], False)
+        assert_equal(restorewo_wallet.abortrescan(), False)
 
         # check user has 0 balance and no transactions
         assert_equal(restorewo_wallet.getbalance(), 0)

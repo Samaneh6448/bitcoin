@@ -44,21 +44,12 @@ import socket
 import time
 import urllib.parse
 
+from .util import JSONRPCException, assert_equal
+
 HTTP_TIMEOUT = 30
 USER_AGENT = "AuthServiceProxy/0.1"
 
 log = logging.getLogger("BitcoinRPC")
-
-class JSONRPCException(Exception):
-    def __init__(self, rpc_error, http_status=None):
-        try:
-            errmsg = '%(message)s (%(code)i)' % rpc_error
-        except (KeyError, TypeError):
-            errmsg = ''
-        super().__init__(errmsg)
-        self.error = rpc_error
-        self.http_status = http_status
-
 
 def serialization_fallback(o):
     if isinstance(o, decimal.Decimal):
@@ -75,6 +66,7 @@ class AuthServiceProxy():
         self.__service_url = service_url
         self._service_name = service_name
         self.ensure_ascii = ensure_ascii  # can be toggled on the fly by tests
+        self.reuse_http_connections = True
         self.__url = urllib.parse.urlparse(service_url)
         user = None if self.__url.username is None else self.__url.username.encode('utf8')
         passwd = None if self.__url.password is None else self.__url.password.encode('utf8')
@@ -92,6 +84,8 @@ class AuthServiceProxy():
             raise AttributeError
         if self._service_name is not None:
             name = "%s.%s" % (self._service_name, name)
+        if not self.reuse_http_connections:
+            self._set_conn()
         return AuthServiceProxy(self.__service_url, name, connection=self.__conn)
 
     def _request(self, method, path, postdata):
@@ -102,6 +96,8 @@ class AuthServiceProxy():
                    'User-Agent': USER_AGENT,
                    'Authorization': self.__auth_header,
                    'Content-type': 'application/json'}
+        if not self.reuse_http_connections:
+            self._set_conn()
         self.__conn.request(method, path, postdata, headers)
         return self._get_response()
 
@@ -143,7 +139,7 @@ class AuthServiceProxy():
             else:
                 return response['result']
         else:
-            assert response['jsonrpc'] == '2.0'
+            assert_equal(response['jsonrpc'], '2.0')
             if status != HTTPStatus.OK:
                 raise JSONRPCException({
                     'code': -342, 'message': 'non-200 HTTP status code'}, status)
@@ -173,7 +169,7 @@ class AuthServiceProxy():
                 'message': '%r RPC took longer than %f seconds. Consider '
                            'using larger timeout for calls that take '
                            'longer to return.' % (self._service_name,
-                                                  self.__conn.timeout)})
+                                                  self.__conn.timeout)}) from None
         if http_response is None:
             raise JSONRPCException({
                 'code': -342, 'message': 'missing HTTP response from server'})
@@ -190,7 +186,7 @@ class AuthServiceProxy():
         content_type = http_response.getheader('Content-Type')
         if content_type != 'application/json':
             raise JSONRPCException(
-                {'code': -342, 'message': 'non-JSON HTTP response with \'%i %s\' from server' % (http_response.status, http_response.reason)},
+                {'code': -342, 'message': f"non-JSON HTTP response with \'{http_response.status} {http_response.reason}\' from server: {http_response.read().decode()}"},
                 http_response.status)
 
         data = http_response.read()

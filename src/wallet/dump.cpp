@@ -37,7 +37,7 @@ bool DumpWallet(const ArgsManager& args, WalletDatabase& db, bilingual_str& erro
         return false;
     }
     std::ofstream dump_file;
-    dump_file.open(path);
+    dump_file.open(path.std_path());
     if (dump_file.fail()) {
         error = strprintf(_("Unable to open %s for writing"), fs::PathToString(path));
         return false;
@@ -61,7 +61,7 @@ bool DumpWallet(const ArgsManager& args, WalletDatabase& db, bilingual_str& erro
 
     // Write out the file format
     std::string format = db.Format();
-    // BDB files that are opened using BerkeleyRODatabase have it's format as "bdb_ro"
+    // BDB files that are opened using BerkeleyRODatabase have its format as "bdb_ro"
     // We want to override that format back to "bdb"
     if (format == "bdb_ro") {
         format = "bdb";
@@ -121,6 +121,11 @@ static void WalletToolReleaseWallet(CWallet* wallet)
 
 bool CreateFromDump(const ArgsManager& args, const std::string& name, const fs::path& wallet_path, bilingual_str& error, std::vector<bilingual_str>& warnings)
 {
+    if (name.empty()) {
+        tfm::format(std::cerr, "Wallet name cannot be empty\n");
+        return false;
+    }
+
     // Get the dumpfile
     std::string dump_filename = args.GetArg("-dumpfile", "");
     if (dump_filename.empty()) {
@@ -134,7 +139,7 @@ bool CreateFromDump(const ArgsManager& args, const std::string& name, const fs::
         error = strprintf(_("Dump file %s does not exist."), fs::PathToString(dump_path));
         return false;
     }
-    std::ifstream dump_file{dump_path};
+    std::ifstream dump_file{dump_path.std_path()};
 
     // Compute the checksum
     HashWriter hasher{};
@@ -151,13 +156,13 @@ bool CreateFromDump(const ArgsManager& args, const std::string& name, const fs::
         return false;
     }
     // Check the version number (value of first record)
-    uint32_t ver;
-    if (!ParseUInt32(version_value, &ver)) {
-        error =strprintf(_("Error: Unable to parse version %u as a uint32_t"), version_value);
+    const auto ver{ToIntegral<uint32_t>(version_value)};
+    if (!ver) {
+        error = strprintf(_("Error: Unable to parse version %u as a uint32_t"), version_value);
         dump_file.close();
         return false;
     }
-    if (ver != DUMP_VERSION) {
+    if (*ver != DUMP_VERSION) {
         error = strprintf(_("Error: Dumpfile version is not supported. This version of bitcoin-wallet only supports version 1 dumpfiles. Got dumpfile with version %s"), version_value);
         dump_file.close();
         return false;
@@ -198,13 +203,6 @@ bool CreateFromDump(const ArgsManager& args, const std::string& name, const fs::
     bool ret = true;
     std::shared_ptr<CWallet> wallet(new CWallet(/*chain=*/nullptr, name, std::move(database)), WalletToolReleaseWallet);
     {
-        LOCK(wallet->cs_wallet);
-        DBErrors load_wallet_ret = wallet->LoadWallet();
-        if (load_wallet_ret != DBErrors::LOAD_OK) {
-            error = strprintf(_("Error creating %s"), name);
-            return false;
-        }
-
         // Get the database handle
         WalletDatabase& db = wallet->GetDatabase();
         std::unique_ptr<DatabaseBatch> batch = db.MakeBatch();
@@ -276,11 +274,17 @@ bool CreateFromDump(const ArgsManager& args, const std::string& name, const fs::
 
         dump_file.close();
     }
+    // On failure, gather the paths to remove
+    std::vector<fs::path> paths_to_remove = wallet->GetDatabase().Files();
+    if (!name.empty()) paths_to_remove.push_back(wallet_path);
+
     wallet.reset(); // The pointer deleter will close the wallet for us.
 
     // Remove the wallet dir if we have a failure
     if (!ret) {
-        fs::remove_all(wallet_path);
+        for (const auto& p : paths_to_remove) {
+            fs::remove(p);
+        }
     }
 
     return ret;
